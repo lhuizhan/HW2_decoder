@@ -44,6 +44,7 @@ for f in french:
             for word in phrase.english.split():
               (lm_state, word_logprob) = lm.score(lm_state, word)
               logprob += word_logprob
+
             logprob += lm.end(lm_state) if j == len(f) else 0.0
             new_hypothesis = hypothesis(logprob, lm_state, h, phrase)
             if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination

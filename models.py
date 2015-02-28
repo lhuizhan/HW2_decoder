@@ -20,6 +20,17 @@ def TM(filename, k):
   for f in tm: # prune all but top k translations
     tm[f].sort(key=lambda x: -x.logprob)
     del tm[f][k:] 
+
+  # # Testing
+  # for line in tm:
+  #   print line, tm[line]
+  # testlist = []
+  # testlist.append('que')
+  # print tuple(testlist)
+  # print tm.has_key(tuple(testlist))
+  # print tm[tuple(testlist)]
+  # # End Testing
+
   return tm
 
 # # A language model scores sequences of English words, and must account
@@ -56,6 +67,18 @@ class LM:
         score += self.table[ngram[:-1]].backoff if len(ngram) > 1 else 0.0 
         ngram = ngram[1:]
     return ((), score + self.table[("<unk>",)].logprob)
-    
+  
+  # #This method gets no word input and returns only the score of input state
+  # def _score(self, state):
+  #   ngram = state
+  #   score = 0.0
+  #   while len(ngram)> 0:
+  #     if ngram in self.table:
+  #       return score + self.table[ngram].logprob
+  #     else: #backoff
+  #       score += self.table[ngram[:-1]].backoff if len(ngram) > 1 else 0.0 
+  #       ngram = ngram[1:]
+  #   return score + self.table[("<unk>",)].logprob
+
   def end(self, state):
     return self.score(state, "</s>")[1]
