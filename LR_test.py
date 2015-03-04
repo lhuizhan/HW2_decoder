@@ -11,13 +11,13 @@ optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", 
 optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to decode (default=no limit)")
 optparser.add_option("-k", "--translations-per-phrase", dest="k", default=1, type="int", help="Limit on number of translations to consider per phrase (default=1)")
-optparser.add_option("-s", "--stack-size", dest="s", default=20, type="int", help="Maximum stack size (default=1)")
+optparser.add_option("-s", "--stack-size", dest="s", default=sys.maxint, type="int", help="Maximum stack size (default=1)")
 optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
-optparser.add_option("-r", "--iteration", dest="iteration", type="int", default=10,  help="LR iteration")
-optparser.add_option("-e", "--improve_size", dest="e", default=0.002, type="float", help="threshold for examine the stop point of LR iteration")
+optparser.add_option("-r", "--iteration", dest="iteration", type="int", default=5,  help="LR iteration")
+optparser.add_option("-e", "--improve_size", dest="e", default=0.2, type="float", help="threshold for examine the stop point of LR iteration")
 opts = optparser.parse_args()[0]
 
-hypothesis = namedtuple("hypothesis", "logprob, lm_state, predecessor, phrase, start, end")                                                                       
+hypothesis = namedtuple("hypothesis", "logprob, lm_state, predecessor, phrase, start, end, constraint")                                                                       
   #n: the number of words that have been translated
   #l and m specify a contiguous span in the source sentence
   #r is the end position of the previous phrase
@@ -29,8 +29,6 @@ lm = models.LM(opts.lm)
 french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]#make french sentence into a tuple with words
 #french = [[('honorables', 's\xc3\xa9nateurs', ',', 'que', 'se', 'est', '-', 'il', 'pass\xc3\xa9', 'ici', ',', 'mardi', 'dernier', '?'), ......]
 
-# initial LR multiplier step size
-alpha = 1.0
 
 # tm should translate unknown words as-is with probability 1
 for word in set(sum(french,())):#find distinct word tuple
@@ -49,7 +47,7 @@ def UpdateMultiplier(U, y_count, alpha):
   for i in xrange(len(U)):
     U[i] = U[i] - alpha*(y_count[i] - 1)
   if alpha > 0.01:
-    alpha /= 2.0
+    alpha /= 1.2
   return U
   
 def count_y(y_count, y_star):
@@ -68,14 +66,18 @@ def Check_Y_Count(f, y_star):
   for i in range(len(f)):
     if y_count[i] != 1:
       opt_flag = False  
+  """
+  sys.stderr.write(str(y_count))
+  sys.stderr.write("\n")
+  """
   return (y_count, opt_flag)
 
 
 def Find_Y_Star(f, C, U):  
-  sys.stderr.write("Find_Y_Star")
-  sys.stderr.write("\n")
+  #sys.stderr.write("Find_Y_Star\n")
+  
 
-  initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, 0, 0)
+  initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, 0, 0, [0 for _ in range(len(f))])
   y = [0 for _ in xrange(len(f))]
   stacks = [{} for _ in f] + [{}] #n dict 
   #[{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}]
@@ -85,9 +87,9 @@ def Find_Y_Star(f, C, U):
 
   for i, stack in enumerate(stacks[:-1]):#ignore the last one element in stacks[]
     for h in sorted(stack.itervalues(),key=lambda h: -h.logprob)[:opts.s]: # prune
-      for n in xrange(len(f)-1):
-        for j in xrange(n+1,n+1+len(f)-i):#i start from 0
-          if f[n:j] in tm: #tm = {('les', 'membres', 'de'): [phrase(english='the men and women in', logprob=-1.79239165783)]}          
+      for n in xrange(len(f)):
+        for j in xrange(n+1,min(len(f)+1, n+1+len(f)-i)):#i start from 0
+          if f[n:j] in tm: #tm = {('les', 'membres', 'de'): [phrase(english='the men and women in', logprob=-1.79239165783)]}                      
             for phrase in tm[f[n:j]]:
               logprob = h.logprob + phrase.logprob
               lm_state = h.lm_state
@@ -95,59 +97,99 @@ def Find_Y_Star(f, C, U):
               for word in phrase.english.split():
                 (lm_state, word_logprob) = lm.score(lm_state, word)
                 logprob += word_logprob
-              logprob += lm.end(lm_state) if j == len(f) else 0.0 #check
-              new_hypothesis = hypothesis(logprob, lm_state, h, phrase, n, j)
+              logprob += lm.end(lm_state) if j == len(f) else 0.0 #check                            
+              new_hypothesis = hypothesis(logprob, lm_state, h, phrase, n, j, [0])                            
               (y_count, opt) = Check_Y_Count(f, new_hypothesis)
-              #sys.stderr.write(str(y_count))
-              #sys.stderr.write("\n")
+
+              
+              valid = True
+              total_word = 0
+              bc = h.constraint
+              """
+              for x in range(n, j):
+                if x in C and (bc[x] + 1 > 1):
+                  valid = False 
               
               for x in range(len(f)):
-                #sys.stderr.write(str(float(U[x])*float((y_count[x] - 1))))
-                #sys.stderr.write("-")
-                logprob += float(U[x])*float((y_count[x] - 1))
-                #sys.stderr.write(str(logprob))
-                #sys.stderr.write("\n")
-               
-              new_hypothesis2 = hypothesis(logprob, lm_state, h, phrase, n, j)
+                total_word += bc[x]
+
+              remain_word = len(f) - total_word
+
+              for x in C:
+                if bc[x] < 1:
+                  remain_word -= 1
+
+              sys.stderr.write("remain word = %r\n" % remain_word)    
+              if remain_word < 0:
+                valid = False                                
+              """  
               """
-              sys.stderr.write(str(i+j-n))
-              sys.stderr.write("-")
-              sys.stderr.write(str(lm_state))
-              sys.stderr.write("\n")
-              sys.stderr.write(str(stacks[i+j-n]))
-              sys.stderr.write("---")              
-              sys.stderr.write("\n")  
-              
-              if lm_state not in stacks[i+j-n]:
-                sys.stderr.write("not in stacks[i+j-n]")
-                sys.stderr.write("\n")
+              if valid:    
+                for x in range(len(f)):
+                  if x in range(n,j):
+                    bc[x] += 1
+                  logprob += float(U[x])*float((y_count[x] - 1))
               else:
-                sys.stderr.write(str(stacks[i+j-n][lm_state].logprob))  
-                sys.stderr.write("\n")
-              """
-              if lm_state not in stacks[i+j-n] or stacks[i+j-n][lm_state].logprob < new_hypothesis2.logprob: # second case is recombination
-                stacks[i+j-n][lm_state] = new_hypothesis2 
+                logprob = float("-inf")
+              """  
+              for x in range(len(f)):
+                if x in range(n,j):
+                  bc[x] += 1
+                logprob += float(U[x])*float((y_count[x] - 1))
+              new_hypothesis = new_hypothesis._replace(logprob=logprob, constraint=bc)
+
+              if lm_state not in stacks[i+j-n] or stacks[i+j-n][lm_state].logprob < new_hypothesis.logprob: # second case is recombination
+                stacks[i+j-n][lm_state] = new_hypothesis
+                #sys.stderr.write(str(new_hypothesis.constraint))
+                #sys.stderr.write("\n")
+
+  #for data in stacks[-1].itervalues():
+  """
+  sys.stderr.write("original size of stack: %r\n" % len(stacks[-1]))
+  for x, key in enumerate(stacks[-1]):
+    bc = stacks[-1][key].constraint   
+    for const in C:
+      if bc[const] != 1:
+        del stacks[-1][key]
+
+  sys.stderr.write("after deletion        : %r\n" % len(stacks[-1]))
+
+  #sys.stderr.write("stacks================\n%r\n" % str(stacks[-1]))
+  """
   
+  #sys.stderr.write("new_stack = \n %r\n" % type(new_stack))
+  for key, value in sorted(stacks[-1].iteritems(), key=lambda (k,v): (v,k), reverse=True):
+    bc = value.constraint
+    win_flag = True
 
-  for index, ci in enumerate(C):
-    
+    for index in range(len(f)):
+      if bc[index] != 1:
+        win_flag = False
+    if win_flag:
+      return (value, value.logprob)
+   
 
-    
+  
   winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
   return (winner, winner.logprob)
-
+  
 
 def Optimize(f, C, U, alpha):
+  U = [0.0 for _ in xrange(len(f))]
+  alpha = 2.0
   sys.stderr.write("Optimize")
   sys.stderr.write("\n")
+  sys.stderr.write(str(C))
+  sys.stderr.write("\n")
+
   improve = True
   iteration = 0
-  best_score_1 = best_score(0, 0.0)
-  best_score_2 = best_score(0, 0.0)
+  best_score_1 = best_score(0, float("-inf"))
+  best_score_2 = best_score(0, float("-inf"))
 
   while(improve):
     iteration += 1
-    if iteration%10 == 0:
+    if iteration%20 == 0:
       sys.stderr.write("LR iteration: ")
       sys.stderr.write(str(iteration))
       sys.stderr.write("\n")
@@ -159,6 +201,10 @@ def Optimize(f, C, U, alpha):
     else:
       U = UpdateMultiplier(U, y_count, alpha)
 
+    #sys.stderr.write(str(U))
+    #sys.stderr.write("\n")
+    #sys.stderr.write("y_score = %r\n" % y_score)
+    
     if y_score > best_score_1.score:
       if iteration > 1:
         best_score_2 = best_score_1
@@ -166,11 +212,18 @@ def Optimize(f, C, U, alpha):
     elif y_score > best_score_2.score:
       best_score_2 = best_score(iteration, y_score)
 
+    #sys.stderr.write(str(best_score_1))
+    #sys.stderr.write("\n")
+    #sys.stderr.write(str(best_score_2))
+    #sys.stderr.write("\n")
+
+
     if (iteration > best_score_2.iteration):
       #sys.stderr.write("Improve rate: ")
       #sys.stderr.write(str((best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration)))
       #sys.stderr.write("\n")
-      if (best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration) < opts.e:
+      #if (best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration) < opts.e:
+      if ((best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration) < opts.e) or ((best_score_1.iteration + 10 < iteration) and (best_score_2.iteration + 10 < iteration)):
         improve = False
   
   count = [0 for _ in xrange(len(f))] #initialize count
@@ -178,6 +231,9 @@ def Optimize(f, C, U, alpha):
   sys.stderr.write("For loop in Optimize")
   sys.stderr.write("\n")
   for k in range(opts.iteration):
+    #sys.stderr.write("k = ")
+    #sys.stderr.write(str(k))
+    #sys.stderr.write("\n")
     (y_star, y_score) = Find_Y_Star(f, C, U)
     (y_count, opt) = Check_Y_Count(f, y_star)
     if (opt):
@@ -193,10 +249,23 @@ def Optimize(f, C, U, alpha):
     expand_C.append(c)
     expand_C.append(c+1)
     expand_C.append(c-1)
-    
-  G = int(len(f) / (2*opts.iteration)) # add G hard constraints
+  #sys.stderr.write("expand_C = ")
+  #sys.stderr.write(str(expand_C))
+  #sys.stderr.write("\n")
+
+
+
+  #G = int(len(f) / (2*opts.iteration)) # add G hard constraints
+  G = 1
+  #sys.stderr.write("G = %r\n" % str(G))
+  
+  sys.stderr.write("y_count = ")
+  sys.stderr.write(str(y_count))
+  sys.stderr.write("\n")
   for key, value in sorted(y_count.items(), key=operator.itemgetter(1), reverse=True):
-    if key not in expand_C and G > 0:      
+    #sys.stderr.write("K, v = %r, %r" %(key, value))
+    if key not in expand_C and value > 0 and G > 0 and len(C) < len(f)-1:   
+      #sys.stderr.write("add c = %r" % key)   
       C.append(key)
       G -= 1
       
@@ -210,6 +279,7 @@ sys.stderr.write("Decoding %s...\n" % (opts.input,))
 for f in french:
   # f = ('honorables', 's\xc3\xa9nateurs', ',', 'que', 'se', 'est', '-', 'il', 'pass\xc3\xa9', 'ici', ',', 'mardi', 'dernier', '?')
 
+  alpha = 1.0
   U = [0.0 for _ in xrange(len(f))] #initialize multipliers
   C = [] #Hard constraint
   optResult = Optimize(f, C, U, alpha)
