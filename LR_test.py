@@ -45,14 +45,10 @@ def extract_english(h):
   return "" if h.predecessor is None else "%s%s " % (extract_english(h.predecessor), h.phrase.english)
 
 
-def UpdateMultiplier(U, y_count):
-  #1. calculate multiplier
-  #2. check solution
-  opt_flag = True
+def UpdateMultiplier(U, y_count, alpha):
   for i in xrange(len(U)):
-    if y_count[i] != 1:
-      opt_flag = False
     U[i] = U[i] - alpha*(y_count[i] - 1)
+  if alpha > 0.01:
     alpha /= 2.0
   return U
   
@@ -67,7 +63,7 @@ def count_y(y_count, y_star):
 
 def Check_Y_Count(f, y_star):
   opt_flag = True
-  y_count = [0 for _ in range(len(f))]
+  y_count = {i:0 for i in range(len(f))}
   y_count = count_y(y_count, y_star)
   for i in range(len(f)):
     if y_count[i] != 1:
@@ -76,6 +72,9 @@ def Check_Y_Count(f, y_star):
 
 
 def Find_Y_Star(f, C, U):  
+  sys.stderr.write("Find_Y_Star")
+  sys.stderr.write("\n")
+
   initial_hypothesis = hypothesis(0.0, lm.begin(), None, None, 0, 0)
   y = [0 for _ in xrange(len(f))]
   stacks = [{} for _ in f] + [{}] #n dict 
@@ -87,7 +86,7 @@ def Find_Y_Star(f, C, U):
   for i, stack in enumerate(stacks[:-1]):#ignore the last one element in stacks[]
     for h in sorted(stack.itervalues(),key=lambda h: -h.logprob)[:opts.s]: # prune
       for n in xrange(len(f)-1):
-        for j in xrange(n+1,n+len(f)-i):#i start from 0
+        for j in xrange(n+1,n+1+len(f)-i):#i start from 0
           if f[n:j] in tm: #tm = {('les', 'membres', 'de'): [phrase(english='the men and women in', logprob=-1.79239165783)]}          
             for phrase in tm[f[n:j]]:
               logprob = h.logprob + phrase.logprob
@@ -99,8 +98,8 @@ def Find_Y_Star(f, C, U):
               logprob += lm.end(lm_state) if j == len(f) else 0.0 #check
               new_hypothesis = hypothesis(logprob, lm_state, h, phrase, n, j)
               (y_count, opt) = Check_Y_Count(f, new_hypothesis)
-              sys.stderr.write(str(y_count))
-              sys.stderr.write("\n")
+              #sys.stderr.write(str(y_count))
+              #sys.stderr.write("\n")
               
               for x in range(len(f)):
                 #sys.stderr.write(str(float(U[x])*float((y_count[x] - 1))))
@@ -126,34 +125,21 @@ def Find_Y_Star(f, C, U):
                 sys.stderr.write(str(stacks[i+j-n][lm_state].logprob))  
                 sys.stderr.write("\n")
               """
-              if lm_state not in stacks[i+j-n+1] or stacks[i+j-n+1][lm_state].logprob < new_hypothesis2.logprob: # second case is recombination
-                sys.stderr.write("In stack--i-n-j = ")
-                sys.stderr.write(str(i))
-                sys.stderr.write("-")
-                sys.stderr.write(str(n))
-                sys.stderr.write("-")
-                sys.stderr.write(str(j))
-                sys.stderr.write(" = ")              
-                sys.stderr.write(str(i+j-n+1))
-                sys.stderr.write("\n")
+              if lm_state not in stacks[i+j-n] or stacks[i+j-n][lm_state].logprob < new_hypothesis2.logprob: # second case is recombination
                 stacks[i+j-n][lm_state] = new_hypothesis2 
   
-  
-  sys.stderr.write(str(len(f)))
-  sys.stderr.write("\n")
 
-  sys.stderr.write(str(stacks[-1]))
-  sys.stderr.write("\n")
-  sys.stderr.write(str(len(stacks)))
-  
+  for index, ci in enumerate(C):
+    
+
+    
   winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
-  sys.stderr.write(str(winner))
+  return (winner, winner.logprob)
+
+
+def Optimize(f, C, U, alpha):
+  sys.stderr.write("Optimize")
   sys.stderr.write("\n")
-  sys.stderr.write(str(extract_english(winner)))
-  return winner
-
-
-def Optimize(f, C, U):
   improve = True
   iteration = 0
   best_score_1 = best_score(0, 0.0)
@@ -161,33 +147,45 @@ def Optimize(f, C, U):
 
   while(improve):
     iteration += 1
+    if iteration%10 == 0:
+      sys.stderr.write("LR iteration: ")
+      sys.stderr.write(str(iteration))
+      sys.stderr.write("\n")
+
     (y_star, y_score) = Find_Y_Star(f, C, U)
     (y_count, opt) = Check_Y_Count(f, y_star)
     if opt:
       return y_star
     else:
-      U = UpdateMultiplier(U, y_count)
+      U = UpdateMultiplier(U, y_count, alpha)
 
     if y_score > best_score_1.score:
-      best_score_2 = best_score_1
-      best_score_1 = (iteration, y_score)
+      if iteration > 1:
+        best_score_2 = best_score_1
+      best_score_1 = best_score(iteration, y_score)
     elif y_score > best_score_2.score:
-      best_score_2 = (iteration, y_score)
+      best_score_2 = best_score(iteration, y_score)
 
-    if (best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration) < opts.e:
-      improve = False
+    if (iteration > best_score_2.iteration):
+      #sys.stderr.write("Improve rate: ")
+      #sys.stderr.write(str((best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration)))
+      #sys.stderr.write("\n")
+      if (best_score_1.score - best_score_2.score)/float(iteration - best_score_2.iteration) < opts.e:
+        improve = False
   
   count = [0 for _ in xrange(len(f))] #initialize count
   
+  sys.stderr.write("For loop in Optimize")
+  sys.stderr.write("\n")
   for k in range(opts.iteration):
     (y_star, y_score) = Find_Y_Star(f, C, U)
     (y_count, opt) = Check_Y_Count(f, y_star)
     if (opt):
       return y_star
     else:
-      U = UpdateMultiplier(U, y_count)
+      U = UpdateMultiplier(U, y_count, alpha)
       for i in xrange(len(f)):
-        if y_count[i] != 1:
+        if y_count[i] > 1:
            count[i] += y_count[i]
 
   expand_C = []
@@ -197,12 +195,12 @@ def Optimize(f, C, U):
     expand_C.append(c-1)
     
   G = int(len(f) / (2*opts.iteration)) # add G hard constraints
-  for key, value in sorted(y_count.itervalues(),key=lambda (k, v): (v,k), reverse=True):
+  for key, value in sorted(y_count.items(), key=operator.itemgetter(1), reverse=True):
     if key not in expand_C and G > 0:      
       C.append(key)
       G -= 1
       
-  return Optimize(f, C, U) 
+  return Optimize(f, C, U, alpha) 
 
 
 """
@@ -214,7 +212,7 @@ for f in french:
 
   U = [0.0 for _ in xrange(len(f))] #initialize multipliers
   C = [] #Hard constraint
-  optResult = Optimize(f, C, U)
+  optResult = Optimize(f, C, U, alpha)
   print extract_english(optResult)
 
   if opts.verbose:
