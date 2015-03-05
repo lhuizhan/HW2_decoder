@@ -10,8 +10,8 @@ X.append('x')
 
 t = ['a','b','c','d']
 
-v = [1, 3, 2, 5, 4]
 
-v.sort()
+string = '000001111'
 
-print v
+print '0' in string
+
