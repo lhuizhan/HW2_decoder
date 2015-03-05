@@ -9,7 +9,7 @@ optparser.add_option("-i", "--input", dest="input", default="data/input", help="
 optparser.add_option("-t", "--translation-model", dest="tm", default="data/tm", help="File containing translation model (default=data/tm)")
 optparser.add_option("-l", "--language-model", dest="lm", default="data/lm", help="File containing ARPA-format language model (default=data/lm)")
 optparser.add_option("-n", "--num_sentences", dest="num_sents", default=sys.maxint, type="int", help="Number of sentences to decode (default=no limit)")
-optparser.add_option("-k", "--translations-per-phrase", dest="k", default=5, type="int", help="Limit on number of translations to consider per phrase (default=1)")
+optparser.add_option("-k", "--translations-per-phrase", dest="k", default=20, type="int", help="Limit on number of translations to consider per phrase (default=1)")
 optparser.add_option("-s", "--stack-size", dest="s", default=100, type="int", help="Maximum stack size (default=1)")
 optparser.add_option("-v", "--verbose", dest="verbose", action="store_true", default=False,  help="Verbose mode (default=off)")
 
@@ -21,7 +21,7 @@ french = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:
 
 #parameters
 stepsize = 2.0
-eta = -0.5
+eta = -1.5
 alpha_decrease_rate = 0.9
 epsilon = 0.02
 iteration_limit = 10
@@ -279,7 +279,7 @@ def optimize(f, u, Constraints):
   
 def main():
 
-  with open('lr_output_eta0.5','w') as f:
+  with open('lr_output_luckey150','w') as f:
     for fsen in french:
       # print 'French sentence =', fsen
       u = [0 for i in range(len(fsen))]
